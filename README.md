@@ -142,9 +142,10 @@ go get github.com/kazkansouh/u2text
 ```
 
 The sub-packages of the program can be taken to parse the unified2
-files independently. That is, the `parser/u2` package has all the code
-needed to parse a single unified2 file and the `spooler` package has
-all the code to track multiple unified2 files.
+files independently. That is, the [`parser`][parser]`/`[`u2`][u2]
+package has all the code needed to parse a single unified2 file and
+the [`spooler`][spooler] package has all the code to track multiple
+unified2 files.
 
 The following options are available:
 
@@ -204,3 +205,6 @@ Licensed under GPLv3, Copyright 2019, Karim Kanso, All rights reserved.
 [template]: https://golang.org/pkg/text/template/ "Golang.org: template - The Go Programming Language"
 [tshark]: https://www.wireshark.org/docs/man-pages/tshark.html "WireShark.org: tshark - The Wireshark Network Analyzer 3.0.2"
 [graylog]: https://www.graylog.org/ "Industry Leading Log Management | Graylog"
+[parser]: https://godoc.org/github.com/kazkansouh/u2text/parser "parser - GoDoc"
+[u2]: https://godoc.org/github.com/kazkansouh/u2text/parser/u2 "u2 - GoDoc"
+[spooler]: https://godoc.org/github.com/kazkansouh/u2text/spooler "spooler - GoDoc"
