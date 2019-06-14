@@ -1,0 +1,9 @@
+*~
+main
+*.map
+classification.config
+*.marker
+*.pcap
+*.u2.*
+flymd*
+*.tmpl
