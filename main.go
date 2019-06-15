@@ -299,7 +299,7 @@ func init() {
 	flag.StringVar(
 		&spoolerDir,
 		"spooler-directory",
-		"/media/kazza/d3287a30-a0be-4b07-9679-4afd81258adc/ccna/gns3/projects/z-snort-first-test/project-files/docker/fd1bd7ad-d5d2-4dad-9a58-e3c08f5836c5/var/log/snort/",
+		"/var/log/snort/",
 		"Specify location where the unified2 log files are written "+
 			"to by snort.")
 
@@ -329,19 +329,19 @@ func init() {
 	flag.StringVar(
 		&sidmsg,
 		"meta-sidmsg",
-		"sid-msg.map",
+		"/etc/snort/sid-msg.map",
 		"Location of 'sid-msg.map' file, if not available use empty file.")
 
 	flag.StringVar(
 		&genmsg,
 		"meta-genmsg",
-		"gen-msg.map",
+		"/etc/snort/gen-msg.map",
 		"Location of 'gen-msg.map' file, if not available use empty file.")
 
 	flag.StringVar(
 		&classification,
 		"meta-classification",
-		"classification.config",
+		"/etc/snort/classification.config",
 		"Location of 'classification.config' file, if not available use empty file.")
 
 	flag.IntVar(
@@ -364,9 +364,68 @@ type tracker chan unit
 // convenience definition of unit value
 var U unit = unit{}
 
+func printConfig() {
+	log.Println("u2text: Copyright 2019, Karim Kanso")
+	log.Println("")
+	log.Println("Configuration:")
+
+	vars := map[string]map[string]interface{}{
+		"Logging": map[string]interface{}{
+			"Enable gelf":        gelfServer != "",
+			"Gelf server":        gelfServer,
+			"Enable syslog":      syslogServer != "",
+			"Syslog server":      syslogServer,
+			"Log to file":        logFile != "",
+			"Logging file":       logFile,
+			"Log display packet": logDisplayPacket.String(),
+		},
+		"Reporting": map[string]interface{}{
+			"Enable reporting":               reportFile != "",
+			"Report file":                    reportFile,
+			"Show packet hash in report":     logDisplayPacket.String() == "hash",
+			"Show packet hex dump in report": reportHexDump,
+		},
+		"TShark": map[string]interface{}{
+			"Parse level":     parsePackets.String(),
+			"Filter layers":   len(fullParseFilter.value) > 0,
+			"Included layers": fullParseFilter.value,
+		},
+		"Spooler": map[string]interface{}{
+			"Snort logging directory": spoolerDir,
+			"Unified2 base file name": baseFileName,
+			"Marker file":             marker.filename,
+			"Marker":                  marker.marker,
+			"Batch mode":              batch,
+		},
+		"Meta data": map[string]interface{}{
+			"sid-msg.map location":           sidmsg,
+			"gen-msg.map location":           genmsg,
+			"classification.config location": classification,
+		},
+		"General options": map[string]interface{}{
+			"Packet processing workers": workers,
+		},
+	}
+
+	for name, block := range vars {
+		log.Println("  ", name)
+		for k, v := range block {
+			switch v.(type) {
+			case []string:
+				log.Printf("    %s: %T:%q\n", k, v, v)
+			default:
+				log.Printf("    %s: %T:%#v\n", k, v, v)
+			}
+		}
+	}
+
+	log.Println("")
+}
+
 func main() {
 	flag.Parse()
 
+	// Process special commands first
 	if reportShowEventTemplate {
 		fmt.Println(u2.EventTemplate)
 		return
@@ -375,6 +434,8 @@ func main() {
 		fmt.Println(u2.PacketTemplate)
 		return
 	}
+
+	printConfig()
 
 	if workers < 1 {
 		log.Fatal("ERROR: the number of workers must be at least 1")
