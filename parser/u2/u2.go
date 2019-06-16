@@ -192,8 +192,6 @@ func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Recor
 			log.Fatal("unexpected eof reached")
 		}
 
-		log.Printf("read record of type %d with length %d\n", hdr.Tag, hdr.Length)
-
 		switch hdr.Tag {
 		case UNIFIED2_PACKET:
 			packet := Unified2Packet{}

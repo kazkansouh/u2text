@@ -52,8 +52,8 @@ Packet timestamp: {{.Packet_time.Time}}{{with index .Packet "info"}}
 Summary: "{{.}}"{{end}}{{with .Packet_hash}}
 Hash: {{.}}{{end}}{{if gt (len .Packet_data) 0}}
 Raw packet:
-{{.Packet_data | hexdump}}{{end}}
-`
+{{.Packet_data | hexdump}}{{else}}
+{{end}}`
 )
 
 var (
