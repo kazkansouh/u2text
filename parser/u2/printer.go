@@ -50,7 +50,8 @@ Action: {{.Blocked}}
 Event timestamp: {{.Event_second | time}}
 Packet timestamp: {{.Packet_time.Time}}{{with index .Packet "info"}}
 Summary: "{{.}}"{{end}}{{with .Packet_hash}}
-Hash: {{.}}{{end}}{{if gt (len .Packet_data) 0}}
+Hash: {{.}}{{end}}
+Packet len: {{.Packet_length}}{{if gt (len .Packet_data) 0}}
 Raw packet:
 {{.Packet_data | hexdump}}{{else}}
 {{end}}`
