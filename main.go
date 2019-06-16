@@ -35,6 +35,7 @@ import (
 
 	"gopkg.in/Graylog2/go-gelf.v2/gelf"
 
+	"github.com/kazkansouh/u2text/packetserver"
 	"github.com/kazkansouh/u2text/parser"
 	"github.com/kazkansouh/u2text/parser/u2"
 	"github.com/kazkansouh/u2text/spooler"
@@ -199,6 +200,11 @@ var (
 	// log options, setting to hash will include the sha hash in the report too
 	logDisplayPacket = stringOps{"hash", []string{"full", "hash"}}
 
+	// control running of packet server
+	logPacketServerPresentationAuthority string
+	logPacketServerAddress               string
+	logPacketDirectory                   string
+
 	// report destinations
 	reportFile               string
 	reportHexDump            bool
@@ -255,6 +261,29 @@ func init() {
 			"to reduce the size of logs sent to server. "+
 			"Note, when set to hash, will also include hash "+
 			"in report. "+logDisplayPacket.usage())
+
+	flag.StringVar(
+		&logPacketServerPresentationAuthority,
+		"log-packet-server-presentation",
+		"",
+		"Requires '-log-display-packet=hash'. When set, enables a "+
+			"http server that makes pcap files available (where "+
+			"the name of the file is the hash). The value of "+
+			"this should be the base external url of this host, e.g. "+
+			"'http://1.2.3.4:8865' that will be entered into log "+
+			"entries to link to the pcap file.")
+
+	flag.StringVar(&logPacketServerAddress,
+		"log-packet-server-bind-address",
+		"0.0.0.0:8865",
+		"Location to bind the server to.")
+
+	flag.StringVar(&logPacketDirectory,
+		"log-packet-server-directory",
+		"packetcache",
+		"Directory that the packet server uses to save packets to. "+
+			"Files will be pcaps that have the hash of the "+
+			"underlying packet as the filename.")
 
 	flag.StringVar(
 		&reportFile,
@@ -390,13 +419,17 @@ func printConfig() {
 
 	vars := map[string]map[string]interface{}{
 		"Logging": map[string]interface{}{
-			"Enable gelf":        logGelfServer != "",
-			"Gelf server":        logGelfServer,
-			"Enable syslog":      logSyslogServer != "",
-			"Syslog server":      logSyslogServer,
-			"Log to file":        logFile != "",
-			"Logging file":       logFile,
-			"Log display packet": logDisplayPacket.String(),
+			"Enable gelf":                   logGelfServer != "",
+			"Gelf server":                   logGelfServer,
+			"Enable syslog":                 logSyslogServer != "",
+			"Syslog server":                 logSyslogServer,
+			"Log to file":                   logFile != "",
+			"Logging file":                  logFile,
+			"Log display packet":            logDisplayPacket.String(),
+			"Enable packet server":          logPacketServerPresentationAuthority != "",
+			"Packet server external url":    "http://" + logPacketServerPresentationAuthority,
+			"Packet server bind address":    logPacketServerAddress,
+			"Packet server cache directory": logPacketDirectory,
 		},
 		"Reporting": map[string]interface{}{
 			"Enable reporting":               reportFile != "",
@@ -458,6 +491,10 @@ func main() {
 
 	if workers < 1 {
 		log.Fatal("ERROR: the number of workers must be at least 1")
+	}
+
+	if logPacketServerPresentationAuthority != "" && logDisplayPacket.value != "hash" {
+		log.Fatal("ERROR: unable to run packet server without display packet as hash.")
 	}
 
 	// Read meta data from config files
@@ -541,6 +578,17 @@ func main() {
 	track_start := make(tracker, 0)
 	track_end := make(tracker, workers)
 
+	// Start packet server
+	server := packetserver.NewPacketServer(logPacketServerAddress, logPacketDirectory)
+	if logPacketServerPresentationAuthority == "" {
+		// server not needed, set channel to nil to prevent
+		// waiting on it below
+		server.Errors = nil
+	} else {
+		log.Println("Starting PacketServer on:", logPacketServerAddress)
+		server.Start()
+	}
+
 	// Enter main loop, processing records as they are received
 	go func() {
 		defer func() {
@@ -579,6 +627,13 @@ func main() {
 						case "hash":
 							pkt.CalculateHash()
 							pkt.Packet_data = nil
+
+							// send packet to packet server
+							if logPacketServerPresentationAuthority != "" {
+								server.Packets <- pkt
+								pkt.Packet_uri = logPacketServerPresentationAuthority + "/" + pkt.Packet_hash[7:] + ".pcap"
+							}
+
 						default:
 							log.Fatalf("ERROR: invalid value for display packet: %s\n", logDisplayPacket.value)
 						}
@@ -593,7 +648,7 @@ func main() {
 					// prepare packet for reporting
 					if pkt, ok := r.R.(*u2.Unified2Packet); ok {
 						if reportHexDump {
-							pkt.RestorePacketData()
+							pkt.Packet_data = pkt.OriginalPacketData()
 						} else {
 							pkt.Packet_data = nil
 						}
@@ -655,6 +710,27 @@ loop:
 			lastmarker = spool.Stop(false)
 		case <-workers_done:
 			break loop
+		case err, ok := <-server.Errors:
+			if !ok {
+				// server shut down ok
+				server.Errors = nil
+				log.Println("WARNING: PacketServer stopped")
+			} else {
+				log.Println("PacketServer error:", err.Error())
+				lastmarker = spool.Stop(false)
+			}
+		}
+	}
+
+	// request packetserver stops
+	close(server.Packets)
+	for server.Errors != nil {
+		err, ok := <-server.Errors
+		if !ok {
+			server.Errors = nil
+			log.Println("PacketServer stopped")
+		} else {
+			log.Println("PacketServer error: ", err.Error())
 		}
 	}
 

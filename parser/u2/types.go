@@ -105,6 +105,9 @@ type Unified2Packet struct {
 	// call CalculateHash to populate
 	Packet_hash string `u2:"ignore:*" json:",omitempty"`
 
+	// a uri where the packet can be obtained from
+	Packet_uri string `u2:"ignore:*" json:",omitempty"`
+
 	// Call DecodePacket to populate
 	Packet map[string]interface{} `u2:"ignore:*" json:",omitempty"`
 
@@ -112,10 +115,9 @@ type Unified2Packet struct {
 	packet_data []byte `u2:"ignore:*" json:"-"`
 }
 
-// Restore Packet_data from internal copy, useful if Packet_data has
-// been cleared for marshalling.
-func (x *Unified2Packet) RestorePacketData() {
-	x.Packet_data = x.packet_data
+// Return original copy of packet data
+func (x *Unified2Packet) OriginalPacketData() []byte {
+	return x.packet_data
 }
 
 // Combine both Generator and Signature id maps into single type for
