@@ -99,11 +99,13 @@ func (s *Spooler) process(result chan<- *u2.Record) {
 
 	// caller has requested shutdown at end of records
 	batch := false
+	// caller has requested showdown now
+	brutal := false
 	// a new file is pending to be read
 	var newpending string = ""
 loop:
 	for {
-		if newpending == "" {
+		if newpending == "" && !brutal {
 			// continue used in following to quickly
 			// populate newpending with next file to
 			// process
@@ -152,13 +154,15 @@ loop:
 
 		select {
 		case graceful := <-s.shutdown:
-			log.Println("Shutdown requested")
-			batch = graceful
 			if graceful {
+				batch = true
+				log.Println("Shutdown requested (graceful)")
 				if clientshutdown != nil {
 					clientshutdown <- u2.U
 				}
 			} else {
+				brutal = true
+				log.Println("Shutdown requested (brutal)")
 				newpending = ""
 				if clientshutdown != nil {
 					close(clientshutdown)

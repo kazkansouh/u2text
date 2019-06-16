@@ -621,29 +621,41 @@ func main() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	// wait for all routines to complete
-	i := 0
-	for {
-		if i < workers {
-
-			select {
-			case <-track_start:
-				i++
-			case <-track_end:
+	// channel that is closed when all workers are complete
+	workers_done := make(chan tracker, 0)
+	go func() {
+		// wait for all routines to complete
+		i := 0
+		for {
+			if i < workers {
+				select {
+				case <-track_start:
+					i++
+				case <-track_end:
+					i--
+				}
+			} else {
+				<-track_end
 				i--
-			case sig := <-signals:
-				log.Println("Shutdown requested (", sig, ")")
-				lastmarker = spool.Stop(false)
+			}
+			if i < 0 {
+				break
 			}
 
-		} else {
-			<-track_end
-			i--
 		}
-		if i < 0 {
-			break
-		}
+		close(workers_done)
+	}()
 
+	// wait for exit conditions
+loop:
+	for {
+		select {
+		case sig := <-signals:
+			log.Println("Shutdown requested (", sig, ")")
+			lastmarker = spool.Stop(false)
+		case <-workers_done:
+			break loop
+		}
 	}
 
 	log.Println("Parsing finished")

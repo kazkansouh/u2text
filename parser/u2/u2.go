@@ -77,8 +77,8 @@ func readData(f *os.File, b []byte, shutdown UnitChannel, isgraceful bool) readD
 		// not all data was read, wait a short while and try again
 		select {
 		case <-time.NewTimer(time.Second).C:
-		case _, closed := <-shutdown:
-			if closed {
+		case _, ok := <-shutdown:
+			if !ok {
 				// bail out now
 				return shutdownNow
 			} else {
