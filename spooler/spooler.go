@@ -92,6 +92,7 @@ func (s *Spooler) process(result chan<- *u2.Record) {
 		s.processdone <- s.done
 	}()
 	var clientresult <-chan *u2.Record
+	var clienterrors <-chan error
 	var clientshutdown chan *u2.Unit
 
 	timer := time.NewTimer(0)
@@ -103,6 +104,14 @@ func (s *Spooler) process(result chan<- *u2.Record) {
 	brutal := false
 	// a new file is pending to be read
 	var newpending string = ""
+
+	start := func(file string, offset int64) {
+		clientshutdown = make(chan *u2.Unit, 1)
+		clientresult, clienterrors = parser.ParseU2(filepath.Join(s.logdir, file), offset, clientshutdown)
+		if batch && clientshutdown != nil {
+			clientshutdown <- u2.U
+		}
+	}
 loop:
 	for {
 		if newpending == "" && !brutal {
@@ -119,11 +128,7 @@ loop:
 				if file == s.done.File {
 					if clientresult == nil {
 						// continue processing
-						clientshutdown = make(chan *u2.Unit, 1)
-						clientresult = parser.ParseU2(filepath.Join(s.logdir, file), s.done.Offset, clientshutdown)
-						if batch && clientshutdown != nil {
-							clientshutdown <- u2.U
-						}
+						start(file, s.done.Offset)
 					}
 					continue
 				} else {
@@ -131,11 +136,7 @@ loop:
 						// new file
 						s.done.File = file
 						s.done.Offset = 0
-						clientshutdown = make(chan *u2.Unit, 1)
-						clientresult = parser.ParseU2(filepath.Join(s.logdir, file), 0, clientshutdown)
-						if batch && clientshutdown != nil {
-							clientshutdown <- u2.U
-						}
+						start(file, 0)
 						continue
 
 					} else {
@@ -169,7 +170,11 @@ loop:
 					clientshutdown = nil
 				}
 			}
-
+		case err := <-clienterrors:
+			// client will now exit, no need to send shutdown request
+			brutal = true
+			newpending = ""
+			log.Println("ERROR: Unable to parse unified2 file:", err.Error())
 		default:
 		}
 
@@ -183,15 +188,16 @@ loop:
 				<-timer.C
 			}
 			if !ok {
+				if !brutal {
+					// reached eof
+					log.Println("Finsihed processing:", s.done.File)
+				}
+
 				if newpending != "" {
 					// client ended, start on next file
 					s.done.File = newpending
 					s.done.Offset = 0
-					clientshutdown = make(chan *u2.Unit, 1)
-					clientresult = parser.ParseU2(filepath.Join(s.logdir, newpending), 0, clientshutdown)
-					if batch {
-						clientshutdown <- u2.U
-					}
+					start(newpending, 0)
 					newpending = ""
 				} else {
 					close(result)

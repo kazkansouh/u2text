@@ -20,6 +20,7 @@ package parser
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/kazkansouh/u2text/parser/classification"
 	"github.com/kazkansouh/u2text/parser/gen"
@@ -65,7 +66,7 @@ func ParseMaps(sidmap, genmap, clsmap string) (*u2.MessageMap, error) {
 }
 
 // Parse a given unified2 file asynchronously. Parsed records are
-// returned over a channel.
+// returned over the channel result.
 //
 // The channel shutdown is used to stop parsing. If channel is closed,
 // parse function will stop immediately (e.g. in case the application
@@ -74,9 +75,18 @@ func ParseMaps(sidmap, genmap, clsmap string) (*u2.MessageMap, error) {
 // error will occur). The graceful stop can be used when a new spool
 // file is detected.
 //
-// When the parse function terminates, the channel will be closed.
-func ParseU2(file string, offset int64, shutdown u2.UnitChannel) <-chan *u2.Record {
+// When the parse terminates, the result channel will be closed.
+//
+// Any errors will be written to the errors channel before process
+// terminates.
+func ParseU2(
+	file string,
+	offset int64,
+	shutdown u2.UnitChannel,
+) (<-chan *u2.Record, <-chan error) {
 	result := make(chan *u2.Record, 10)
-	go u2.Parse(file, offset, shutdown, result)
-	return result
+	errors := make(chan error, 0)
+	log.Printf("Parsing %s at offset %x\n", file, offset)
+	go u2.Parse(file, offset, shutdown, result, errors)
+	return result, errors
 }

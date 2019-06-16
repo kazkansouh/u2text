@@ -25,6 +25,7 @@
 package u2
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -52,14 +53,19 @@ type UnitChannel <-chan *Unit
 var U = &Unit{}
 
 // Read requested number of bytes from file
-func readData(f *os.File, b []byte, shutdown UnitChannel, isgraceful bool) readDataResult {
+func readData(
+	r io.Reader,
+	b []byte, shutdown UnitChannel,
+	isgraceful bool,
+	errors chan<- error,
+) readDataResult {
 	toread := b[:]
 	result := proceed
 	if isgraceful {
 		result = gracefulShutdown
 	}
 	for {
-		n, err := f.Read(toread)
+		n, err := r.Read(toread)
 		if n > 0 {
 			toread = toread[n:]
 			if len(toread) == 0 {
@@ -67,7 +73,7 @@ func readData(f *os.File, b []byte, shutdown UnitChannel, isgraceful bool) readD
 			}
 		}
 		if err != nil && err != io.EOF {
-			log.Println("Unable to read from file:", err)
+			errors <- err
 			return failure
 		}
 		// eof was received at begining of block
@@ -133,16 +139,25 @@ func (r *Record) BondMessageMap(m *MessageMap) {
 // error will occur). The graceful stop can be used when a new spool
 // file is detected.
 //
-// When the parse function terminates, the channel will be closed.
-func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Record) {
+// When the parse terminates, the result channel will be closed.
+//
+// Any errors will be written to the errors channel before process
+// terminates.
+func Parse(
+	file string,
+	offset int64,
+	shutdown UnitChannel,
+	result chan<- *Record,
+	errors chan<- error,
+) {
 	defer func() {
 		close(result)
 	}()
-	log.Printf("Parsing %s at offset %x\n", file, offset)
 
 	f, err := os.OpenFile(file, os.O_RDONLY, 0)
 	if err != nil {
-		log.Fatal(err)
+		errors <- err
+		return
 	}
 	defer func() {
 		f.Close()
@@ -150,56 +165,63 @@ func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Recor
 
 	newoffset, err := f.Seek(offset, 0)
 	if err != nil {
-		log.Fatal(err)
+		errors <- err
+		return
 	}
 	if offset != newoffset {
-		log.Fatal("file location is not what was requested")
+		errors <- fmt.Errorf("Unable to seek to %d", offset)
+		return
 	}
 
 	graceful := false
 	for {
 		buffer := make([]byte, 8)
-		switch readData(f, buffer, shutdown, graceful) {
+		switch readData(f, buffer, shutdown, graceful, errors) {
 		case proceed:
 			offset += int64(len(buffer))
 		case failure:
-			log.Fatal("unable to read header")
+			errors <- fmt.Errorf("Unable to read unified2 header from %s", file)
+			return
 		case shutdownNow:
 			return
 		case gracefulShutdown:
 			graceful = true
 		case noRead:
-			log.Println("Graceful shutdown at EOF")
 			return
 		}
 
 		hdr := header{}
 		if err := encoding.Unmarshal(&hdr, buffer); err != nil {
-			log.Fatal(err)
+			errors <- err
+			return
 		}
 
 		buffer = make([]byte, hdr.Length)
-		switch readData(f, buffer, shutdown, false) {
+		switch readData(f, buffer, shutdown, false, errors) {
 		case proceed:
 			offset += int64(len(buffer))
 		case failure:
-			log.Fatal("unable to read data")
+			errors <- fmt.Errorf("Unable to read unified2 record data from %s", file)
+			return
 		case shutdownNow:
 			return
 		case gracefulShutdown:
 			graceful = true
 		case noRead:
-			log.Fatal("unexpected eof reached")
+			errors <- fmt.Errorf("Unexpected eof reached while reading unified2 record at offset: %d", offset)
+			return
 		}
 
 		switch hdr.Tag {
 		case UNIFIED2_PACKET:
 			packet := Unified2Packet{}
 			if err := encoding.Unmarshal(&packet, buffer); err != nil {
-				log.Fatal(err)
+				errors <- err
+				return
 			}
 			if packet.Packet_length != uint32(len(packet.Packet_data)) {
-				log.Fatal("Packet length does not match expected length")
+				errors <- fmt.Errorf("Packet length does not match expected length: expected %d, got %d", packet.Packet_length, len(packet.Packet_data))
+				return
 			}
 			packet.packet_data = packet.Packet_data
 			result <- &Record{
@@ -212,7 +234,8 @@ func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Recor
 		case UNIFIED2_IDS_EVENT:
 			event := Unified2IDSEvent_legacy{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				log.Fatal(err)
+				errors <- err
+				return
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -224,7 +247,8 @@ func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Recor
 		case UNIFIED2_IDS_EVENT_IPV6:
 			event := Unified2IDSEventIPv6_legacy{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				log.Fatal(err)
+				errors <- err
+				return
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -236,7 +260,8 @@ func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Recor
 		case UNIFIED2_IDS_EVENT_VLAN:
 			event := Unified2IDSEvent{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				log.Fatal(err)
+				errors <- err
+				return
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -248,7 +273,8 @@ func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Recor
 		case UNIFIED2_IDS_EVENT_IPV6_VLAN:
 			event := Unified2IDSEventIPv6{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				log.Fatal(err)
+				errors <- err
+				return
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -258,6 +284,7 @@ func Parse(file string, offset int64, shutdown UnitChannel, result chan<- *Recor
 				Offset:   offset,
 			}
 		default:
+			// TODO: support UNIFIED2_EXTRA_DATA
 			log.Println("WARNING: Ignoring unknown record tag: ", hdr.Tag)
 		}
 	}
