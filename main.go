@@ -1,3 +1,22 @@
+/*
+ * Copyright (c) 2019 Karim Kanso. All Rights Reserved.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+// Main package for u2text program. See
+// http://github.com/kazkansouh/u2text for more information.
 package main
 
 import (
@@ -173,9 +192,9 @@ func (m *reportPacketTemplate) Set(val string) error {
 
 var (
 	// logging destinations
-	gelfServer   string
-	syslogServer string
-	logFile      string
+	logGelfServer   string
+	logSyslogServer string
+	logFile         string
 
 	// log options, setting to hash will include the sha hash in the report too
 	logDisplayPacket = stringOps{"hash", []string{"full", "hash"}}
@@ -207,15 +226,15 @@ var (
 
 func init() {
 	flag.StringVar(
-		&gelfServer,
-		"gelf",
+		&logGelfServer,
+		"log-gelf",
 		"",
 		"To enable gelf logging, set to server address in "+
 			"the format 'address:port'. Only supports UDP.")
 
 	flag.StringVar(
-		&syslogServer,
-		"syslog",
+		&logSyslogServer,
+		"log-syslog",
 		"",
 		"To enable syslog logging, set to server address in "+
 			"the format 'protocol://address:port'. Where "+
@@ -371,10 +390,10 @@ func printConfig() {
 
 	vars := map[string]map[string]interface{}{
 		"Logging": map[string]interface{}{
-			"Enable gelf":        gelfServer != "",
-			"Gelf server":        gelfServer,
-			"Enable syslog":      syslogServer != "",
-			"Syslog server":      syslogServer,
+			"Enable gelf":        logGelfServer != "",
+			"Gelf server":        logGelfServer,
+			"Enable syslog":      logSyslogServer != "",
+			"Syslog server":      logSyslogServer,
 			"Log to file":        logFile != "",
 			"Logging file":       logFile,
 			"Log display packet": logDisplayPacket.String(),
@@ -464,29 +483,29 @@ func main() {
 			logWriters = append(logWriters, file)
 		}
 	}
-	if gelfServer != "" {
-		gelfWriter, err := gelf.NewUDPWriter(gelfServer)
+	if logGelfServer != "" {
+		gelfWriter, err := gelf.NewUDPWriter(logGelfServer)
 		if err != nil {
 			log.Fatal(err)
 		}
 		defer gelfWriter.Close()
 		logWriters = append(logWriters, gelfWriter)
 	}
-	if syslogServer != "" {
+	if logSyslogServer != "" {
 		network := ""
 		switch {
-		case strings.HasPrefix(syslogServer, "tcp://"):
+		case strings.HasPrefix(logSyslogServer, "tcp://"):
 			network = "tcp"
-			syslogServer = syslogServer[6:]
-		case strings.HasPrefix(syslogServer, "udp://"):
+			logSyslogServer = logSyslogServer[6:]
+		case strings.HasPrefix(logSyslogServer, "udp://"):
 			network = "udp"
-			syslogServer = syslogServer[6:]
-		case syslogServer == "localhost":
-			syslogServer = ""
+			logSyslogServer = logSyslogServer[6:]
+		case logSyslogServer == "localhost":
+			logSyslogServer = ""
 		default:
-			log.Fatalf("ERROR: specified syslog server (%s) should begin with udp:// or tcp:// or be set to localhost.", syslogServer)
+			log.Fatalf("ERROR: specified syslog server (%s) should begin with udp:// or tcp:// or be set to localhost.", logSyslogServer)
 		}
-		syslogWriter, err := syslog.Dial(network, syslogServer, syslog.LOG_ALERT|syslog.LOG_LOCAL4, "")
+		syslogWriter, err := syslog.Dial(network, logSyslogServer, syslog.LOG_ALERT|syslog.LOG_LOCAL4, "")
 		if err != nil {
 			log.Fatal(err)
 		}
