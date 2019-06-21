@@ -27,7 +27,6 @@ package u2
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"time"
 
@@ -55,10 +54,11 @@ var U = &Unit{}
 // Read requested number of bytes from file
 func readData(
 	r io.Reader,
-	b []byte, shutdown UnitChannel,
+	b []byte,
+	shutdown UnitChannel,
 	isgraceful bool,
-	errors chan<- error,
-) readDataResult {
+	noop bool,
+) (readDataResult, error) {
 	toread := b[:]
 	result := proceed
 	if isgraceful {
@@ -69,24 +69,23 @@ func readData(
 		if n > 0 {
 			toread = toread[n:]
 			if len(toread) == 0 {
-				return result
+				return result, nil
 			}
 		}
 		if err != nil && err != io.EOF {
-			errors <- err
-			return failure
+			return failure, err
 		}
 		// eof was received at begining of block
-		if n == 0 && err == io.EOF && result == gracefulShutdown {
-			return noRead
+		if n == 0 && err == io.EOF && result == gracefulShutdown && noop {
+			return noRead, nil
 		}
 		// not all data was read, wait a short while and try again
 		select {
-		case <-time.NewTimer(time.Second).C:
+		case <-time.NewTimer(time.Millisecond * 100).C:
 		case _, ok := <-shutdown:
 			if !ok {
 				// bail out now
-				return shutdownNow
+				return shutdownNow, nil
 			} else {
 				// read to end of block
 				result = gracefulShutdown
@@ -129,8 +128,89 @@ func (r *Record) BondMessageMap(m *MessageMap) {
 	}
 }
 
+// Stubbing a read only interface of a file
+type readSeekCloser interface {
+	io.Reader
+	io.Seeker
+	io.Closer
+}
+
+var (
+	// stubbed os.OpenFile for testing
+	openFile = func(file string, flag int, perms os.FileMode) (readSeekCloser, error) {
+		return os.OpenFile(file, flag, perms)
+	}
+)
+
+// Error codes produced by Parse function
+type ErrorCode int
+
+// Sequence of error constants produced by Parse function
+const (
+	// Unable to open file
+	E_Open ErrorCode = iota
+	// When Seek returns an error or when Seek reports no error
+	// but did not seek to expected location
+	E_Seek
+	// When an occurs from during reading data from file,
+	// typically during a Read operation
+	E_ReadData
+	// Incorrect format of data read from file
+	E_Unmarshal
+	// Length of Unified2Packet does not match length in
+	// header. Possible corrupt file.
+	E_PacketLen
+)
+
+// Errors returned by parse function, type primarily used for test
+// code
+type ParseError interface {
+	error
+	File() string
+	Code() ErrorCode
+	NextError() error
+}
+
+type parseError struct {
+	message string
+	file    string
+	ErrorCode
+	error
+}
+
+func (e *parseError) Error() string {
+	msg := e.file
+	if e.message != "" {
+		msg = msg + ": " + e.message
+	}
+	if e.error != nil {
+		msg = msg + ": " + e.error.Error()
+	}
+	return msg
+}
+
+func (e *parseError) File() string {
+	return e.file
+}
+
+func (e *parseError) Code() ErrorCode {
+	return e.ErrorCode
+}
+
+func (e *parseError) NextError() error {
+	return e.error
+}
+
 // Parse a given unified2 file asynchronously. Parsed records are
-// returned over the channel result.
+// returned over the channel result. Only the below types are parsed,
+// any other type will have the unprocessed byte slice returned in the
+// record.
+//
+//   UNIFIED2_PACKET uint32 = 2
+//   UNIFIED2_IDS_EVENT uint32 = 7
+//   UNIFIED2_IDS_EVENT_IPV6 uint32 = 72
+//   UNIFIED2_IDS_EVENT_VLAN uint32 = 104
+//   UNIFIED2_IDS_EVENT_IPV6_VLAN uint32 = 105
 //
 // The channel shutdown is used to stop parsing. If channel is closed,
 // parse function will stop immediately (e.g. in case the application
@@ -148,80 +228,96 @@ func Parse(
 	offset int64,
 	shutdown UnitChannel,
 	result chan<- *Record,
-	errors chan<- error,
-) {
-	defer func() {
-		close(result)
-	}()
-
-	f, err := os.OpenFile(file, os.O_RDONLY, 0)
+) error {
+	f, err := openFile(file, os.O_RDONLY, 0)
 	if err != nil {
-		errors <- err
-		return
+		return &parseError{
+			message:   "Unable to open file",
+			file:      file,
+			ErrorCode: E_Open,
+			error:     err,
+		}
 	}
-	defer func() {
-		f.Close()
-	}()
+	defer f.Close()
 
 	newoffset, err := f.Seek(offset, 0)
 	if err != nil {
-		errors <- err
-		return
+		return &parseError{
+			message:   "Unable to seek on file",
+			file:      file,
+			ErrorCode: E_Seek,
+			error:     err,
+		}
 	}
 	if offset != newoffset {
-		errors <- fmt.Errorf("Unable to seek to %d", offset)
-		return
+		// maybe this is not a valid situation
+		return &parseError{
+			message:   "Seek to wrong location",
+			file:      file,
+			ErrorCode: E_Seek,
+		}
 	}
 
 	graceful := false
 	for {
 		buffer := make([]byte, 8)
-		switch readData(f, buffer, shutdown, graceful, errors) {
+		switch r, err := readData(f, buffer, shutdown, graceful, true); r {
 		case proceed:
 			offset += int64(len(buffer))
 		case failure:
-			errors <- fmt.Errorf("Unable to read unified2 header from %s", file)
-			return
+			return &parseError{
+				message:   "Unable to read unified2 header",
+				file:      file,
+				ErrorCode: E_ReadData,
+				error:     err,
+			}
 		case shutdownNow:
-			return
+			return nil
 		case gracefulShutdown:
 			graceful = true
 		case noRead:
-			return
+			return nil
 		}
 
+		// not possible to generate error when unmarshalling
+		// as header consists of 2 uint32, i.e. any 8 bytes
+		// are valid
 		hdr := header{}
-		if err := encoding.Unmarshal(&hdr, buffer); err != nil {
-			errors <- err
-			return
-		}
+		encoding.Unmarshal(&hdr, buffer)
 
 		buffer = make([]byte, hdr.Length)
-		switch readData(f, buffer, shutdown, false, errors) {
+		switch r, err := readData(f, buffer, shutdown, false, false); r {
 		case proceed:
 			offset += int64(len(buffer))
 		case failure:
-			errors <- fmt.Errorf("Unable to read unified2 record data from %s", file)
-			return
+			return &parseError{
+				message:   "Unable to read unified2 record data",
+				file:      file,
+				ErrorCode: E_ReadData,
+				error:     err,
+			}
 		case shutdownNow:
-			return
+			return nil
 		case gracefulShutdown:
 			graceful = true
-		case noRead:
-			errors <- fmt.Errorf("Unexpected eof reached while reading unified2 record at offset: %d", offset)
-			return
 		}
 
 		switch hdr.Tag {
 		case UNIFIED2_PACKET:
 			packet := Unified2Packet{}
 			if err := encoding.Unmarshal(&packet, buffer); err != nil {
-				errors <- err
-				return
+				return &parseError{
+					file:      file,
+					ErrorCode: E_Unmarshal,
+					error:     err,
+				}
 			}
 			if packet.Packet_length != uint32(len(packet.Packet_data)) {
-				errors <- fmt.Errorf("Packet length does not match expected length: expected %d, got %d", packet.Packet_length, len(packet.Packet_data))
-				return
+				return &parseError{
+					message:   fmt.Sprintf("Packet length does not match expected length: expected %d, got %d", packet.Packet_length, len(packet.Packet_data)),
+					file:      file,
+					ErrorCode: E_PacketLen,
+				}
 			}
 			packet.packet_data = packet.Packet_data
 			result <- &Record{
@@ -234,8 +330,11 @@ func Parse(
 		case UNIFIED2_IDS_EVENT:
 			event := Unified2IDSEvent_legacy{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				errors <- err
-				return
+				return &parseError{
+					file:      file,
+					ErrorCode: E_Unmarshal,
+					error:     err,
+				}
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -247,8 +346,11 @@ func Parse(
 		case UNIFIED2_IDS_EVENT_IPV6:
 			event := Unified2IDSEventIPv6_legacy{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				errors <- err
-				return
+				return &parseError{
+					file:      file,
+					ErrorCode: E_Unmarshal,
+					error:     err,
+				}
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -260,8 +362,11 @@ func Parse(
 		case UNIFIED2_IDS_EVENT_VLAN:
 			event := Unified2IDSEvent{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				errors <- err
-				return
+				return &parseError{
+					file:      file,
+					ErrorCode: E_Unmarshal,
+					error:     err,
+				}
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -273,8 +378,11 @@ func Parse(
 		case UNIFIED2_IDS_EVENT_IPV6_VLAN:
 			event := Unified2IDSEventIPv6{}
 			if err := encoding.Unmarshal(&event, buffer); err != nil {
-				errors <- err
-				return
+				return &parseError{
+					file:      file,
+					ErrorCode: E_Unmarshal,
+					error:     err,
+				}
 			}
 			result <- &Record{
 				Tag:      hdr.Tag,
@@ -285,7 +393,13 @@ func Parse(
 			}
 		default:
 			// TODO: support UNIFIED2_EXTRA_DATA
-			log.Println("WARNING: Ignoring unknown record tag: ", hdr.Tag)
+			result <- &Record{
+				Tag:      hdr.Tag,
+				Name:     "Unknown",
+				R:        buffer,
+				FileName: file,
+				Offset:   offset,
+			}
 		}
 	}
 }

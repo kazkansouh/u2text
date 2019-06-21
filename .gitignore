@@ -7,3 +7,4 @@ classification.config
 *.u2.*
 flymd*
 *.tmpl
+*.out

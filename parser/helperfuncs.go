@@ -78,7 +78,8 @@ func ParseMaps(sidmap, genmap, clsmap string) (*u2.MessageMap, error) {
 // When the parse terminates, the result channel will be closed.
 //
 // Any errors will be written to the errors channel before process
-// terminates.
+// terminates. Note, errors is a blocking channel, so result channel
+// will only be closed after errors are read from error channel.
 func ParseU2(
 	file string,
 	offset int64,
@@ -87,6 +88,12 @@ func ParseU2(
 	result := make(chan *u2.Record, 10)
 	errors := make(chan error, 0)
 	log.Printf("Parsing %s at offset %x\n", file, offset)
-	go u2.Parse(file, offset, shutdown, result, errors)
+	go func() {
+		defer close(result)
+		if err := u2.Parse(file, offset, shutdown, result); err != nil {
+			errors <- err
+		}
+
+	}()
 	return result, errors
 }

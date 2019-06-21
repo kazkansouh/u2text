@@ -83,7 +83,7 @@ func (t *Time) UnmarshalC(data []byte) (uint, error) {
 
 	t.Second = x.Second
 	t.Microsecond = x.Microsecond
-	t.Time = time.Unix(int64(t.Second), int64(t.Microsecond)*1000)
+	t.Time = time.Unix(int64(t.Second), int64(t.Microsecond)*1000).In(time.UTC)
 
 	return i, nil
 }
@@ -191,7 +191,7 @@ type Blocked string
 // Consume 1 bytes and save as string
 func (blk *Blocked) UnmarshalC(data []byte) (uint, error) {
 	if len(data) < 1 {
-		return 0, errors.New("Stream too short to blocked (uint8)")
+		return 0, errors.New("Stream too short to parse blocked (uint8)")
 	}
 
 	switch data[0] {
@@ -261,7 +261,7 @@ type Unified2IDSEventIPv6_legacy struct {
 	Protocol           Protocol
 	Impact_flag        uint8
 	Impact             uint8
-	Blocked            uint8
+	Blocked            Blocked
 }
 
 func (x *Unified2IDSEventIPv6_legacy) BondMessageMap(m *MessageMap) {
@@ -287,9 +287,9 @@ type Unified2IDSEvent struct {
 	Impact_flag        uint8 //overloads packet_action
 	Impact             uint8
 	Blocked            Blocked
-	Mpls_label         uint32
-	VlanId             uint16
-	Pad2               uint16 //Policy ID
+	Mpls_label         uint32 `json:",omitempty"`
+	VlanId             uint16 `json:",omitempty"`
+	Pad2               uint16 `json:",omitempty"` //Policy ID
 }
 
 func (x *Unified2IDSEvent) BondMessageMap(m *MessageMap) {
@@ -315,9 +315,9 @@ type Unified2IDSEventIPv6 struct {
 	Impact_flag        uint8
 	Impact             uint8
 	Blocked            Blocked
-	Mpls_label         uint32
-	VlanId             uint16
-	Pad2               uint16 /*could be IPS Policy local id to support local sensor alerts*/
+	Mpls_label         uint32 `json:",omitempty"`
+	VlanId             uint16 `json:",omitempty"`
+	Pad2               uint16 `json:",omitempty"` /*could be IPS Policy local id to support local sensor alerts*/
 }
 
 func (x *Unified2IDSEventIPv6) BondMessageMap(m *MessageMap) {
@@ -326,60 +326,60 @@ func (x *Unified2IDSEventIPv6) BondMessageMap(m *MessageMap) {
 	x.Classification.BondMessageMap(m)
 }
 
-//	UNIFIED2_IDS_EVENT_APPID      uint32 = 111
-type Unified2IDSEvent_appid struct {
-	Sensor_id          uint32
-	Event_id           uint32
-	Event_time         Time
-	Event_info         EventID
-	Signature_revision uint32
-	Classification     Classification
-	Priority_id        uint32
-	Ip_source          IPv4
-	Ip_destination     IPv4
-	Sport_itype        uint16
-	Dport_icode        uint16
-	Protocol           Protocol
-	Impact_flag        uint8 //overloads packet_action
-	Impact             uint8
-	Blocked            Blocked
-	Mpls_label         uint32
-	VlanId             uint16
-	Pad2               uint16 //Policy ID
-	App_name           string `u2:"string-length:64"`
-}
+// //	UNIFIED2_IDS_EVENT_APPID      uint32 = 111
+// type Unified2IDSEvent_appid struct {
+// 	Sensor_id          uint32
+// 	Event_id           uint32
+// 	Event_time         Time
+// 	Event_info         EventID
+// 	Signature_revision uint32
+// 	Classification     Classification
+// 	Priority_id        uint32
+// 	Ip_source          IPv4
+// 	Ip_destination     IPv4
+// 	Sport_itype        uint16
+// 	Dport_icode        uint16
+// 	Protocol           Protocol
+// 	Impact_flag        uint8 //overloads packet_action
+// 	Impact             uint8
+// 	Blocked            Blocked
+// 	Mpls_label         uint32
+// 	VlanId             uint16
+// 	Pad2               uint16 //Policy ID
+// 	App_name           string `u2:"string-length:64"`
+// }
 
-func (x *Unified2IDSEvent_appid) BondMessageMap(m *MessageMap) {
-	x.Event_info.BondMessageMap(m)
-	x.Protocol.BondMessageMap(m)
-	x.Classification.BondMessageMap(m)
-}
+// func (x *Unified2IDSEvent_appid) BondMessageMap(m *MessageMap) {
+// 	x.Event_info.BondMessageMap(m)
+// 	x.Protocol.BondMessageMap(m)
+// 	x.Classification.BondMessageMap(m)
+// }
 
-//	UNIFIED2_IDS_EVENT_APPID_IPV6 uint32 = 112
-type Unified2IDSEventIPv6_appid struct {
-	Sensor_id          uint32
-	Event_id           uint32
-	Event_time         Time
-	Event_info         EventID
-	Signature_revision uint32
-	Classification     Classification
-	Priority_id        uint32
-	Ip_source          IPv6
-	Ip_destination     IPv6
-	Sport_itype        uint16
-	Dport_icode        uint16
-	Protocol           Protocol
-	Impact_flag        uint8
-	Impact             uint8
-	Blocked            Blocked
-	Mpls_label         uint32
-	VlanId             uint16
-	Pad2               uint16 /*could be IPS Policy local id to support local sensor alerts*/
-	App_name           string `u2:"string-length:64"`
-}
+// //	UNIFIED2_IDS_EVENT_APPID_IPV6 uint32 = 112
+// type Unified2IDSEventIPv6_appid struct {
+// 	Sensor_id          uint32
+// 	Event_id           uint32
+// 	Event_time         Time
+// 	Event_info         EventID
+// 	Signature_revision uint32
+// 	Classification     Classification
+// 	Priority_id        uint32
+// 	Ip_source          IPv6
+// 	Ip_destination     IPv6
+// 	Sport_itype        uint16
+// 	Dport_icode        uint16
+// 	Protocol           Protocol
+// 	Impact_flag        uint8
+// 	Impact             uint8
+// 	Blocked            Blocked
+// 	Mpls_label         uint32
+// 	VlanId             uint16
+// 	Pad2               uint16 /*could be IPS Policy local id to support local sensor alerts*/
+// 	App_name           string `u2:"string-length:64"`
+// }
 
-func (x *Unified2IDSEventIPv6_appid) BondMessageMap(m *MessageMap) {
-	x.Event_info.BondMessageMap(m)
-	x.Protocol.BondMessageMap(m)
-	x.Classification.BondMessageMap(m)
-}
+// func (x *Unified2IDSEventIPv6_appid) BondMessageMap(m *MessageMap) {
+// 	x.Event_info.BondMessageMap(m)
+// 	x.Protocol.BondMessageMap(m)
+// 	x.Classification.BondMessageMap(m)
+// }

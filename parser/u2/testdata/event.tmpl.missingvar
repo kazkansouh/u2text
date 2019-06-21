@@ -1,0 +1,8 @@
+
+ IDS Event {{.Sensor_id}}:{{.Event_id}}
+------------------
+Timestamp: {{.Event_time.Time}}
+{{if eq .Event_info.Generator_id 1 -}} Signature: {{.Event_info.Signature_id}} {{- else -}} Generator: {{.Event_info.Generator_id -}}:{{- .Event_info.Signature_id}} {{- end}}, Description: "{{ with .Event_info.DescriptionX }}{{.}}{{else}}---{{end}}"
+Classification: {{ with .Classification.Description }}"{{.}}"{{else}}{{.Classification.Id}}{{end}}
+Direction: ({{ with .Protocol.Name }}{{.}}{{else}}{{.Protocol.Number}}{{end}}) {{.Ip_source.MarshalText | string}}:{{.Sport_itype}} -> {{.Ip_destination.MarshalText | string}}:{{.Dport_icode}}
+Action: {{.Blocked}}

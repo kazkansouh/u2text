@@ -24,9 +24,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"io/ioutil"
 	"net"
-	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -69,49 +68,41 @@ var (
 			}
 		},
 		"time": func(seconds uint32) time.Time {
-			return time.Unix(int64(seconds), 0)
+			return time.Unix(int64(seconds), 0).In(time.UTC)
 		},
 		"hexdump": hex.Dump,
 	}
 )
 
-func init() {
-	evt := template.New("event")
-	evt.Funcs(funcmap)
-	if _, err := evt.Parse(EventTemplate); err != nil {
-		log.Fatal("Unable to initialise template: ", err.Error())
+// load a template from string
+func loadTemplate(name, tmplText string) (*template.Template, error) {
+	tmpl := template.New(name)
+	tmpl.Funcs(funcmap)
+	if _, err := tmpl.Parse(tmplText); err != nil {
+		return nil, err
 	}
-	templates["event"] = evt
-
-	pkt := template.New("packet")
-	pkt.Funcs(funcmap)
-	if _, err := pkt.Parse(PacketTemplate); err != nil {
-		log.Fatal("Unable to initialise template: ", err.Error())
-	}
-	templates["packet"] = pkt
-
+	templates[name] = tmpl
+	return tmpl, nil
 }
 
 // Load a text/template file for report printing of unified2 events
 func LoadEventTemplate(file string) error {
-	evt := template.New(filepath.Base(file))
-	evt.Funcs(funcmap)
-	if _, err := evt.ParseFiles(file); err != nil {
+	buff, err := ioutil.ReadFile(file)
+	if err != nil {
 		return err
 	}
-	templates["event"] = evt
-	return nil
+	_, err = loadTemplate("event", string(buff))
+	return err
 }
 
 // Load a text/template file for report printing of unified2 packets
 func LoadPacketTemplate(file string) error {
-	pkt := template.New(filepath.Base(file))
-	pkt.Funcs(funcmap)
-	if _, err := pkt.ParseFiles(file); err != nil {
+	buff, err := ioutil.ReadFile(file)
+	if err != nil {
 		return err
 	}
-	templates["packet"] = pkt
-	return nil
+	_, err = loadTemplate("packet", string(buff))
+	return err
 }
 
 func (s *EventID) Description() string {
@@ -225,16 +216,26 @@ func (ip IPv6) MarshalText() ([]byte, error) {
 	return net.IP(ip).MarshalText()
 }
 
-func writeTo(x interface{}, template string, w io.Writer) (int64, error) {
+func lookupTemplate(template string, fallback string) (*template.Template, error) {
 	t, ok := templates[template]
 	if !ok {
-		return 0, errors.New("Template has not been initialised")
+		return loadTemplate(template, fallback)
+	}
+	return t, nil
+
+}
+
+func writeTo(x interface{}, template string, fallback string, w io.Writer) (int64, error) {
+	// get a template
+	t, err := lookupTemplate(template, fallback)
+	if err != nil {
+		return 0, err
 	}
 
 	// buffer output to ensure consistent
 	buffer := bytes.Buffer{}
 
-	err := t.Execute(&buffer, x)
+	err = t.Execute(&buffer, x)
 	if err != nil {
 		return 0, err
 	}
@@ -245,32 +246,61 @@ func writeTo(x interface{}, template string, w io.Writer) (int64, error) {
 
 // Pretty print event record in a report format
 func (x *Unified2IDSEvent_legacy) WriteTo(w io.Writer) (int64, error) {
-	return writeTo(x, "event", w)
+	return writeTo(x, "event", EventTemplate, w)
 }
 
 // Pretty print event record in a report format
 func (x *Unified2IDSEventIPv6_legacy) WriteTo(w io.Writer) (int64, error) {
-	return writeTo(x, "event", w)
+	return writeTo(x, "event", EventTemplate, w)
 }
 
 // Pretty print event record in a report format
 func (x *Unified2IDSEvent) WriteTo(w io.Writer) (int64, error) {
-	return writeTo(x, "event", w)
+	return writeTo(x, "event", EventTemplate, w)
 }
 
 // Pretty print event record in a report format
 func (x *Unified2IDSEventIPv6) WriteTo(w io.Writer) (int64, error) {
-	return writeTo(x, "event", w)
+	return writeTo(x, "event", EventTemplate, w)
 }
 
 // Pretty print packet
 func (x *Unified2Packet) WriteTo(w io.Writer) (int64, error) {
-	return writeTo(x, "packet", w)
+	return writeTo(x, "packet", PacketTemplate, w)
+}
+
+// lookup in a hierarchy of maps a given value, if it exists,
+// otherwise return nil
+func findVal(m map[string]interface{}, path []string) interface{} {
+	var v interface{} = m
+	for _, p := range path {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			return nil
+		}
+		v, ok = m[p]
+		if !ok {
+			return nil
+		}
+	}
+	return v
 }
 
 // Decode packet using TShark and store result in the Packet
 // field. Subsequent calls overwrite the result.
 func (x *Unified2Packet) DecodePacket(onlySummary bool, fullParseFilter []string) error {
+	return x.decodePacket(packet.ParsePacket, onlySummary, fullParseFilter)
+}
+
+type decoder func(uint32, uint32, uint32, []byte, []string) (map[string]interface{}, error)
+
+// Decode packet using TShark and store result in the Packet
+// field. Subsequent calls overwrite the result.
+func (x *Unified2Packet) decodePacket(
+	decoder decoder,
+	onlySummary bool,
+	fullParseFilter []string,
+) error {
 	args := []string{"-P"}
 	if !onlySummary {
 		args = append(args, "-V")
@@ -279,7 +309,7 @@ func (x *Unified2Packet) DecodePacket(onlySummary bool, fullParseFilter []string
 		}
 
 	}
-	pkt, err := packet.ParsePacket(
+	pkt, err := decoder(
 		x.Packet_time.Second,
 		x.Packet_time.Microsecond,
 		x.Linktype,
@@ -295,64 +325,25 @@ func (x *Unified2Packet) DecodePacket(onlySummary bool, fullParseFilter []string
 	// packet, thus only works if "-T ek -V" has been passed to
 	// TShark. If a filter has been used, then it must have
 	// included "ip data" otherwise the below will not work.
-	if onlySummary {
-		return nil
-	}
 
 	// First, check protocol ip is 255.
 	// { "layers" : {"ip" : {"ip_ip_proto" : "255"} }
 	// "layers" is only included with "-V" option
-	layers_interface, ok := pkt["layers"]
-	if !ok {
-		return nil
-	}
-	layers, ok := layers_interface.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	ip_interface, ok := layers["ip"]
-	if !ok {
-		return nil
-	}
-	ip, ok := ip_interface.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	protocol, ok := ip["ip_ip_proto"]
-	if !ok {
-		return nil
-	}
-	if protocol != "255" {
+	if protocol, ok := findVal(x.Packet, []string{"layers", "ip", "ip_ip_proto"}).(string); !ok || protocol != "255" {
 		return nil
 	}
 
 	// Secondly, access ip payload, if present
 	// { "layers" : {"data" : {"data_data_data" : "xx:xx:xx"} }
-	data_interface, ok := layers["data"]
-	if !ok {
-		return nil
+	if data, ok := findVal(x.Packet, []string{"layers", "data", "data_data_data"}).(string); ok {
+		// Finally decode and save payload into
+		// { "info" : ... }
+		message, err := hex.DecodeString(strings.Replace(data, ":", "", -1))
+		if err != nil {
+			return err
+		}
+		x.Packet["info"] = string(message)
 	}
-	data, ok := data_interface.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	ip_data, ok := data["data_data_data"]
-	if !ok {
-		return nil
-	}
-	payload, ok := ip_data.(string)
-	if !ok {
-		log.Println("WARNING: string expected in data_data_data")
-		return nil
-	}
-
-	// Finally decode and save payload into
-	// { "info" : ... }
-	message, err := hex.DecodeString(strings.Replace(payload, ":", "", -1))
-	if err != nil {
-		return err
-	}
-	pkt["info"] = string(message)
 	return nil
 }
 
