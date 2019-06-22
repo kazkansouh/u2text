@@ -72,15 +72,17 @@ func (p properties) clone() properties {
 	return q
 }
 
+// Adds string of the form:
+//    "key1:value1 key2:value2"
 func (p properties) append(kvs string) error {
 	s := strings.Split(kvs, " ")
 	for _, v := range s {
 		kv := strings.SplitN(v, ":", 2)
-		if len(kv) == 2 {
+		if len(kv) == 2 && kv[0] != "" {
 			p[kv[0]] = kv[1]
 		} else {
 			if v != "" {
-				return fmt.Errorf("Invalid tag: %s", v)
+				return fmt.Errorf("Invalid tag: %q", v)
 			}
 		}
 	}
@@ -93,13 +95,20 @@ type state struct {
 }
 
 func (s *state) remain() uint {
-	return uint(len(s.data)) - s.position
+	if l := uint(len(s.data)); l > s.position {
+		return l - s.position
+	}
+	return 0
 }
 
 // Unmarshal data into the structure passed in to x.
 //
-// Returns number of bytes consumed, or an error in which case x might
-// have been partially populated.
+// Returns number of bytes consumed, or an error (typically as the
+// data slice is too small) in which case x might have been partially
+// populated and some bytes consumed. For example, in the case of a
+// struct or non-byte slice its possible that members will be parsed
+// and assigned to relevant locations until an error occours. In which
+// case, the uint returned will be the last successful parse.
 func UnmarshalPartial(x interface{}, data []byte) (uint, error) {
 	s := newState(data)
 
@@ -113,6 +122,9 @@ func UnmarshalPartial(x interface{}, data []byte) (uint, error) {
 	return s.position, err
 }
 
+// See UnmarshalPartial. In addition, Unmarshal will print a log
+// message/warning if the number of bytes consumed is less than the
+// number of bytes in data slice.
 func Unmarshal(x interface{}, data []byte) error {
 	i, err := UnmarshalPartial(x, data)
 	if err != nil {
@@ -132,7 +144,7 @@ func newState(data []byte) *state {
 
 func (s *state) read(v reflect.Value, p properties) error {
 	if !v.IsValid() {
-		return fmt.Errorf("Invalid type: %v", v)
+		return fmt.Errorf("Invalid value")
 	}
 
 	if v.CanAddr() {
@@ -150,7 +162,7 @@ func (s *state) read(v reflect.Value, p properties) error {
 			}
 		}
 
-		if v.CanAddr() {
+		if v.CanAddr() && v.Kind() != reflect.Interface {
 			break
 		}
 		v = v.Elem()
@@ -173,7 +185,6 @@ func (s *state) read(v reflect.Value, p properties) error {
 		return fmt.Errorf("Unsupported type: %v", v.Kind())
 	}
 
-	return nil
 }
 
 func (s *state) readUint(size uint, v reflect.Value, p properties) error {
@@ -215,7 +226,7 @@ func (s *state) readStruct(v reflect.Value, p properties) error {
 func (s *state) readSlice(v reflect.Value, p properties) error {
 	val, ok := p["slice-length"]
 	if !ok {
-		return errors.New("Slice length not specified")
+		return errors.New("attribute slice-length not specified")
 	}
 	if val == "*" {
 		val = "0"
@@ -230,7 +241,7 @@ func (s *state) readSlice(v reflect.Value, p properties) error {
 	}
 
 	if l < 0 {
-		return errors.New("Slice length <0 only supported on byte slices.")
+		return errors.New("slice-length <0 only supported on byte slices.")
 	}
 
 	v.Set(reflect.MakeSlice(v.Type(), l, l))
@@ -265,7 +276,7 @@ func (s *state) readByteSlice(size int, v reflect.Value, p properties) error {
 func (s *state) readString(v reflect.Value, p properties) error {
 	val, ok := p["string-length"]
 	if !ok {
-		return errors.New("String length not specified")
+		return errors.New("atrribute string-length not specified")
 	}
 	l, err := strconv.Atoi(val)
 	if err != nil {
@@ -273,7 +284,7 @@ func (s *state) readString(v reflect.Value, p properties) error {
 	}
 
 	if l < 0 {
-		return errors.New("String length <0 not supported.")
+		return errors.New("string-length <0 not supported.")
 	}
 
 	if s.remain() < uint(l) {
