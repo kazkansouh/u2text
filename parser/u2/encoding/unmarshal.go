@@ -50,7 +50,6 @@ package encoding
 import (
 	"errors"
 	"fmt"
-	"log"
 	"reflect"
 	"strconv"
 	"strings"
@@ -122,9 +121,16 @@ func UnmarshalPartial(x interface{}, data []byte) (uint, error) {
 	return s.position, err
 }
 
-// See UnmarshalPartial. In addition, Unmarshal will print a log
-// message/warning if the number of bytes consumed is less than the
-// number of bytes in data slice.
+type UnmarshalWarning []byte
+
+func (bytes UnmarshalWarning) Error() string {
+	return fmt.Sprintf("%d bytes unused from stream when unmarshalling", len(bytes))
+}
+
+// See UnmarshalPartial. In addition, in the case that not all bytes
+// from data are consumed, Unmarshal will populate the interface x
+// succesfully and then return an UnmarshalWarning error with the
+// remaining bytes.
 func Unmarshal(x interface{}, data []byte) error {
 	i, err := UnmarshalPartial(x, data)
 	if err != nil {
@@ -132,7 +138,7 @@ func Unmarshal(x interface{}, data []byte) error {
 	}
 
 	if uint(len(data)) != i {
-		log.Printf("WARNING: %d bytes unused from stream when unmarshalling.", len(data)-int(i))
+		return UnmarshalWarning(data[i:])
 	}
 
 	return nil

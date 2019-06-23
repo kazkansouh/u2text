@@ -18,16 +18,12 @@
 package encoding
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 	"reflect"
 	"testing"
 
 	"gotest.tools/assert"
-	is "gotest.tools/assert/cmp"
 )
 
 func TestPropertiesClone(t *testing.T) {
@@ -714,6 +710,7 @@ func TestUnmarshalPartial(t *testing.T) {
 	}
 }
 
+// Not sure whether this case is possible in actual use
 func TestReadZero(t *testing.T) {
 	state := newState([]byte{})
 	assert.Error(t, state.read(reflect.Value{}, properties{}), "Invalid value")
@@ -731,10 +728,22 @@ func TestUnmarshal(t *testing.T) {
 
 	testfunc := func(test *test) func(*testing.T) {
 		return func(t *testing.T) {
-			stdoutbuf := bytes.Buffer{}
-			log.SetOutput(&stdoutbuf)
-			defer log.SetOutput(os.Stderr)
 			err := Unmarshal(test.object, test.data)
+			if test.remain > 0 {
+				assert.Assert(t, err != nil)
+				assert.Equal(
+					t,
+					err.Error(),
+					fmt.Sprintf("%d bytes unused from stream when unmarshalling", test.remain),
+				)
+
+				uw, ok := err.(UnmarshalWarning)
+				assert.Assert(t, ok)
+				assert.DeepEqual(t, test.data[len(test.data)-test.remain:], []byte(uw))
+
+				err = nil
+			}
+
 			if test.error == "" {
 				assert.NilError(t, err)
 			} else {
@@ -750,17 +759,6 @@ func TestUnmarshal(t *testing.T) {
 				assert.NilError(t, json.Unmarshal(actual_bytes, &actual))
 
 				assert.DeepEqual(t, expected, actual)
-			}
-
-			if test.remain > 0 {
-				assert.Assert(t,
-					is.Contains(
-						string(stdoutbuf.Bytes()),
-						fmt.Sprintf("WARNING: %d bytes unused from stream when unmarshalling.", test.remain),
-					),
-				)
-			} else {
-				assert.Equal(t, string(stdoutbuf.Bytes()), "")
 			}
 		}
 	}
