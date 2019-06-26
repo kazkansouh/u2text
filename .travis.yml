@@ -2,5 +2,3 @@ language: go
 
 go:
 - 1.12.x
-
-go_import_path: github.com/kazkansouh/u2text
