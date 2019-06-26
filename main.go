@@ -414,6 +414,7 @@ var U unit = unit{}
 
 func printConfig() {
 	log.Println("u2text: Copyright 2019, Karim Kanso")
+	log.Println("Unified2 log processor")
 	log.Println("")
 	log.Println("Configuration:")
 
@@ -569,7 +570,7 @@ func main() {
 
 	// Start the spooler
 	spool := spooler.NewSpooler(spoolerDir, baseFileName)
-	result := spool.Start(marker.marker)
+	result, lastmarker := spool.Start(marker.marker)
 
 	// To reduce the processing time each record when using TShark
 	// to parse packets, each record is processed in its own go
@@ -663,14 +664,10 @@ func main() {
 		}
 	}()
 
-	// placeholder channel to receive record location of final
-	// record that was parsed
-	var lastmarker <-chan spooler.Marker
-
 	// shutdown spooler when it reads last available record if
 	// running in batch mode
-	if batch {
-		lastmarker = spool.Stop(true)
+	if batch && !spool.Stop(true) {
+		log.Fatal("ERROR: Unable to enter batch mode")
 	}
 
 	signals := make(chan os.Signal, 1)
@@ -707,7 +704,9 @@ loop:
 		select {
 		case sig := <-signals:
 			log.Println("Shutdown requested (", sig, ")")
-			lastmarker = spool.Stop(false)
+			if !spool.Stop(false) {
+				log.Println("ERROR: Unable to stop spooler")
+			}
 		case <-workers_done:
 			break loop
 		case err, ok := <-server.Errors:
@@ -717,7 +716,9 @@ loop:
 				log.Println("WARNING: PacketServer stopped")
 			} else {
 				log.Println("PacketServer error:", err.Error())
-				lastmarker = spool.Stop(false)
+				if !spool.Stop(false) {
+					log.Println("ERROR: Unable to stop spooler")
+				}
 			}
 		}
 	}
@@ -736,14 +737,18 @@ loop:
 
 	log.Println("Parsing finished")
 
-	if lastmarker != nil {
-		m := <-lastmarker
-		marker.marker = &m
-		log.Println("Marker:", marker.String())
-		if err := marker.save(); err != nil {
-			log.Println("WARNING: Unable to save marker: ", err.Error())
+	for {
+		err, ok := <-spool.ErrorC()
+		if !ok {
+			break
 		}
-	} else {
-		log.Println("WARNING: Last marker not available")
+		log.Println("ERROR: " + err.Error())
+	}
+
+	m := <-lastmarker
+	marker.marker = m
+	log.Println("Marker:", marker.String())
+	if err := marker.save(); err != nil {
+		log.Println("WARNING: Unable to save marker: ", err.Error())
 	}
 }
