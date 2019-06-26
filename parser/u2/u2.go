@@ -64,7 +64,20 @@ func readData(
 	if isgraceful {
 		result = gracefulShutdown
 	}
+	// first, perform a nonblocking check to see if a
+	// shutdown is requested
+	select {
+	case _, ok := <-shutdown:
+		if !ok {
+			// bail out now
+			return shutdownNow, nil
+		}
+		// read to end of block
+		result = gracefulShutdown
+	default:
+	}
 	for {
+		// read the data
 		n, err := r.Read(toread)
 		if n > 0 {
 			toread = toread[n:]
@@ -86,10 +99,9 @@ func readData(
 			if !ok {
 				// bail out now
 				return shutdownNow, nil
-			} else {
-				// read to end of block
-				result = gracefulShutdown
 			}
+			// read to end of block
+			result = gracefulShutdown
 		}
 	}
 }
@@ -141,6 +153,10 @@ var (
 		return os.OpenFile(file, flag, perms)
 	}
 )
+
+// See "man lseek". Value passed to os.File.Seek as the whence
+// parameter to ensure its not possible to seek past end of file.
+const SeekData = 3
 
 // Error codes produced by Parse function
 type ErrorCode int
@@ -240,7 +256,9 @@ func Parse(
 	}
 	defer f.Close()
 
-	newoffset, err := f.Seek(offset, 0)
+	// 3 == SEEK_DATA => fails if offset is past end of file.  See
+	// "man lseek", possibly using SEEK_DATA is not portable.
+	newoffset, err := f.Seek(offset, SeekData)
 	if err != nil {
 		return &parseError{
 			message:   "Unable to seek on file",
@@ -274,6 +292,7 @@ func Parse(
 		case shutdownNow:
 			return nil
 		case gracefulShutdown:
+			offset += int64(len(buffer))
 			graceful = true
 		case noRead:
 			return nil
@@ -299,6 +318,7 @@ func Parse(
 		case shutdownNow:
 			return nil
 		case gracefulShutdown:
+			offset += int64(len(buffer))
 			graceful = true
 		}
 

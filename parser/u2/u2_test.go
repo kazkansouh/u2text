@@ -27,287 +27,266 @@ import (
 	"testing"
 	"time"
 
+	"gotest.tools/assert"
+
 	"github.com/kazkansouh/gotestlib/testio"
 )
 
-// Nominal case
-func TestReadData_Progress(t *testing.T) {
-	data := []byte("Hello World!")
-	reader := bytes.NewBuffer(data)
-	buffer := make([]byte, 10)
-	shutdown := make(UnitChannel, 1)
-
-	result, err := readData(reader, buffer, shutdown, false, true)
-	switch result {
-	case proceed:
-		if len(buffer) > len(data) {
-			t.Fatal("proceed returned when not enough source bytes available")
-		}
-		// Truncate data
-		data = data[:len(buffer)]
-		if !bytes.Equal(data, buffer) {
-			t.Errorf("Source bytes: %x, Read bytes: %x", data, buffer)
-		}
-	case failure:
-		t.Error("failure returned")
-	case shutdownNow:
-		t.Error("shutdownNow returned")
-	case gracefulShutdown:
-		t.Error("gracefulShutdown returned")
-	case noRead:
-		t.Error("noRead returned")
-	}
-
-	// check for any errors
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-}
-
 var anError = errors.New("An Error")
 
-// Failing reader
-func TestReadData_Failing(t *testing.T) {
-	data := []byte("Hello World!")
-	reader := testio.NewHookedReader(
-		bytes.NewBuffer(data),
-		5,
-		func(ctr int) (next int, err error) {
-			return -1, anError
+func TestReadData(t *testing.T) {
+	type test struct {
+		name          string
+		source        []byte
+		reader        func(shutdown chan<- *Unit, source []byte) io.Reader
+		readlen       int
+		graceful      bool
+		noop          bool
+		expected      readDataResult
+		error         string
+		checkshutdown bool
+	}
+
+	testfunc := func(test *test) func(*testing.T) {
+		return func(t *testing.T) {
+			buffer := make([]byte, test.readlen)
+			shutdown := make(chan *Unit, 1)
+
+			result, err := readData(
+				test.reader(shutdown, test.source),
+				buffer,
+				shutdown,
+				test.graceful,
+				test.noop,
+			)
+
+			assert.Equal(t, result, test.expected)
+
+			if result == proceed || result == gracefulShutdown {
+				assert.Assert(t, test.readlen <= len(test.source))
+				assert.DeepEqual(t, buffer, test.source[:test.readlen])
+			}
+
+			if test.error != "" {
+				assert.ErrorContains(t, err, test.error)
+			} else {
+				assert.NilError(t, err)
+			}
+
+			if test.checkshutdown {
+				t.Log("checking if shutdown queue is empty")
+				select {
+				case _, ok := <-shutdown:
+					assert.Assert(t, !ok)
+				default:
+				}
+			}
+		}
+	}
+
+	for _, test := range []*test{
+		&test{
+			name:          "progress",
+			source:        []byte("Hello World!"),
+			reader:        func(sh chan<- *Unit, src []byte) io.Reader { return bytes.NewReader(src) },
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      proceed,
+			error:         "",
+			checkshutdown: false,
 		},
-	)
-	buffer := make([]byte, 10)
-	shutdown := make(UnitChannel, 1)
-
-	result, err := readData(reader, buffer, shutdown, false, true)
-	switch result {
-	case proceed:
-		t.Error("progress returned")
-	case failure:
-		break
-	case shutdownNow:
-		t.Error("shutdownNow returned")
-	case gracefulShutdown:
-		t.Error("gracefulShutdown returned")
-	case noRead:
-		t.Error("noRead returned")
-	}
-
-	// check for any errors
-	if err != anError {
-		t.Error("Unexpected error:", err)
-	}
-}
-
-// Brutal shutdown
-func TestReadData_ShutdownNow(t *testing.T) {
-	data := []byte("Hello World!")
-	reader := bytes.NewBuffer(data)
-	buffer := make([]byte, 20)
-	shutdown := make(chan *Unit, 1)
-
-	go func() {
-		<-time.NewTimer(10 * time.Millisecond).C
-		close(shutdown)
-	}()
-
-	result, err := readData(reader, buffer, shutdown, false, true)
-	switch result {
-	case proceed:
-		t.Error("progress returned")
-	case failure:
-		t.Error("failure returned")
-	case shutdownNow:
-		break
-	case gracefulShutdown:
-		t.Error("gracefulShutdown returned")
-	case noRead:
-		t.Error("noRead returned")
-	}
-
-	// check for any errors
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-}
-
-// Graceful shutdown - start
-func TestReadData_GracefulShutdownStart(t *testing.T) {
-	data := []byte("Hello World!")
-	reader := bytes.NewBuffer(data)
-	buffer := make([]byte, 10)
-	shutdown := make(chan *Unit, 1)
-
-	result, err := readData(reader, buffer, shutdown, true, true)
-	switch result {
-	case proceed:
-		t.Error("proceed returned")
-	case failure:
-		t.Error("failure returned")
-	case shutdownNow:
-		t.Error("shutdownNow returned")
-	case gracefulShutdown:
-		if len(buffer) > len(data) {
-			t.Fatal("gracefulShutdown returned when not enough source bytes available")
-		}
-		// Truncate data
-		data = data[:len(buffer)]
-		if !bytes.Equal(data, buffer) {
-			t.Errorf("Source bytes: %x, Read bytes: %x", data, buffer)
-		}
-	case noRead:
-		t.Error("noRead returned")
-	}
-
-	// check for any errors
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-}
-
-// Graceful shutdown - start not processed
-func TestReadData_GracefulShutdownIgnore(t *testing.T) {
-	data := []byte("Hello World!")
-	reader := bytes.NewBuffer(data)
-	buffer := make([]byte, 10)
-	shutdown := make(chan *Unit, 1)
-
-	shutdown <- U
-
-	result, err := readData(reader, buffer, shutdown, false, true)
-	switch result {
-	case proceed:
-		if len(buffer) > len(data) {
-			t.Fatal("proceed returned when not enough source bytes available")
-		}
-		// Truncate data
-		data = data[:len(buffer)]
-		if !bytes.Equal(data, buffer) {
-			t.Errorf("Source bytes: %x, Read bytes: %x", data, buffer)
-		}
-
-		select {
-		case <-shutdown:
-		default:
-			t.Error("proceed returned, but consumed from shutdown channel")
-		}
-	case failure:
-		t.Error("failure returned")
-	case shutdownNow:
-		t.Error("shutdownNow returned")
-	case gracefulShutdown:
-		t.Error("gracefulShutdown returned")
-	case noRead:
-		t.Error("noRead returned")
-	}
-
-	// check for any errors
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-}
-
-// Graceful shutdown - via channel
-func TestReadData_GracefulShutdownMiddle(t *testing.T) {
-	data := []byte("Hello World!")
-	shutdown := make(chan *Unit, 1)
-	reader := testio.NewHookedReader(
-		bytes.NewBuffer(data),
-		5,
-		func(ctr int) (next int, err error) {
-			shutdown <- U
-			return 100, nil
+		&test{
+			name:   "failure",
+			source: []byte("Hello World!"),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				return testio.NewHookedReader(
+					bytes.NewBuffer(src),
+					5,
+					func(ctr int) (next int, err error) {
+						return -1, anError
+					},
+				)
+			},
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      failure,
+			error:         anError.Error(),
+			checkshutdown: false,
 		},
-	)
-	buffer := make([]byte, 10)
-
-	result, err := readData(reader, buffer, shutdown, false, true)
-	switch result {
-	case proceed:
-		t.Error("proceed returned")
-	case failure:
-		t.Error("failure returned")
-	case shutdownNow:
-		t.Error("shutdownNow returned")
-	case gracefulShutdown:
-		if len(buffer) > len(data) {
-			t.Fatal("gracefulShutdown returned when not enough source bytes available")
-		}
-		// Truncate data
-		data = data[:len(buffer)]
-		if !bytes.Equal(data, buffer) {
-			t.Fatalf("Source bytes: %x, Read bytes: %x", data, buffer)
-		}
-	case noRead:
-		t.Fatal("noRead returned")
-	}
-
-	// check for any errors
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-}
-
-// GracefulShutdown with NoRead over channel
-func TestReadData_NoReadChannel(t *testing.T) {
-	data := []byte("")
-	reader := bytes.NewBuffer(data)
-	buffer := make([]byte, 10)
-	shutdown := make(chan *Unit, 1)
-
-	go func() {
-		<-time.NewTimer(150 * time.Millisecond).C
-		shutdown <- U
-	}()
-
-	result, err := readData(reader, buffer, shutdown, false, true)
-	switch result {
-	case proceed:
-		t.Fatal("proceed returned")
-	case failure:
-		t.Fatal("failure returned")
-	case shutdownNow:
-		t.Fatal("shutdownNow returned")
-	case gracefulShutdown:
-		t.Fatal("gracefulShutdown returned")
-	case noRead:
-		select {
-		case <-shutdown:
-			t.Error("noRead returned, but did not consume from shutdown channel")
-		default:
-		}
-	}
-
-	// check for any errors
-	if err != nil {
-		t.Error("Unexpected error:", err)
-	}
-}
-
-// GracefulShutdown with NoRead at start
-func TestReadData_NoReadStart(t *testing.T) {
-	data := []byte("")
-	reader := bytes.NewBuffer(data)
-	buffer := make([]byte, 10)
-	shutdown := make(chan *Unit, 1)
-
-	result, err := readData(reader, buffer, shutdown, true, true)
-	switch result {
-	case proceed:
-		t.Fatal("proceed returned")
-	case failure:
-		t.Fatal("failure returned")
-	case shutdownNow:
-		t.Fatal("shutdownNow returned")
-	case gracefulShutdown:
-		t.Fatal("gracefulShutdown returned")
-	case noRead:
-		break
-	}
-
-	// check for any errors
-	if err != nil {
-		t.Error("Unexpected error:", err)
+		&test{
+			name:   "brutal-start",
+			source: []byte("Hello World!"),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				close(sh)
+				return bytes.NewReader(src)
+			},
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      shutdownNow,
+			error:         "",
+			checkshutdown: false,
+		},
+		&test{
+			name:   "brutal-mid",
+			source: []byte("Hello World!"),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				return testio.NewHookedReader(
+					bytes.NewBuffer(src),
+					2,
+					func(ctr int) (next int, err error) {
+						close(sh)
+						return -1, io.EOF
+					},
+				)
+			},
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      shutdownNow,
+			error:         "",
+			checkshutdown: false,
+		},
+		&test{
+			name:   "graceful-start-brutal-mid",
+			source: []byte("Hello World!"),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				return testio.NewHookedReader(
+					bytes.NewBuffer(src),
+					2,
+					func(ctr int) (next int, err error) {
+						if next == 1 {
+							sh <- U
+							return 2, io.EOF
+						} else {
+							close(sh)
+							return -1, io.EOF
+						}
+					},
+				)
+			},
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      shutdownNow,
+			error:         "",
+			checkshutdown: true,
+		},
+		&test{
+			name:   "graceful-start",
+			source: []byte("Hello World!"),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				sh <- U
+				return bytes.NewReader(src)
+			},
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      gracefulShutdown,
+			error:         "",
+			checkshutdown: false,
+		},
+		&test{
+			name:   "graceful-mid",
+			source: []byte("Hello World!"),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				return testio.NewHookedReader(
+					bytes.NewBuffer(src),
+					2,
+					func(ctr int) (next int, err error) {
+						sh <- U
+						return -1, io.EOF
+					},
+				)
+			},
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      gracefulShutdown,
+			error:         "",
+			checkshutdown: true,
+		},
+		&test{
+			name:          "graceful-initial",
+			source:        []byte("Hello World!"),
+			reader:        func(sh chan<- *Unit, src []byte) io.Reader { return bytes.NewReader(src) },
+			readlen:       10,
+			graceful:      true,
+			noop:          true,
+			expected:      gracefulShutdown,
+			error:         "",
+			checkshutdown: false,
+		},
+		&test{
+			name:   "graceful-with-op",
+			source: []byte(""),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				itr := 0
+				return testio.RF(func(p []byte) (int, error) {
+					// perform 2 reads then fail
+					if itr == 2 {
+						return 0, anError
+					}
+					itr += 1
+					return 0, io.EOF
+				})
+			},
+			readlen:       10,
+			graceful:      true,
+			noop:          false,
+			expected:      failure,
+			error:         anError.Error(),
+			checkshutdown: false,
+		},
+		&test{
+			name:   "graceful-initial-with-noop",
+			source: []byte(""),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				itr := 0
+				return testio.RF(func(p []byte) (int, error) {
+					// perform 2 reads then fail
+					if itr == 2 {
+						return 0, anError
+					}
+					itr += 1
+					return 0, io.EOF
+				})
+			},
+			readlen:       10,
+			graceful:      true,
+			noop:          true,
+			expected:      noRead,
+			error:         "",
+			checkshutdown: false,
+		},
+		&test{
+			name:   "graceful-mid-with-noop",
+			source: []byte(""),
+			reader: func(sh chan<- *Unit, src []byte) io.Reader {
+				itr := 0
+				return testio.RF(func(p []byte) (int, error) {
+					if itr == 0 {
+						sh <- U
+					}
+					// perform 2 reads then fail
+					if itr == 2 {
+						return 0, anError
+					}
+					itr += 1
+					return 0, io.EOF
+				})
+			},
+			readlen:       10,
+			graceful:      false,
+			noop:          true,
+			expected:      noRead,
+			error:         "",
+			checkshutdown: true,
+		},
+	} {
+		t.Run(test.name, testfunc(test))
 	}
 }
 
@@ -410,8 +389,8 @@ func TestParse_NoSeek(t *testing.T) {
 			openFile = func(f string, flag int, p os.FileMode) (readSeekCloser, error) {
 				return &testio.MockFile{
 					S: testio.SF(func(o int64, w int) (int64, error) {
-						if w != io.SeekStart {
-							t.Error("Seek called without whence=SeekStart")
+						if w != SeekData {
+							t.Error("Seek called without whence=SeekData")
 						}
 						if o != offset {
 							t.Errorf("Seek called with incorrect offset, expecting %d, got %d", offset, o)
