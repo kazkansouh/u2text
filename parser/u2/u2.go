@@ -145,6 +145,7 @@ type readSeekCloser interface {
 	io.Reader
 	io.Seeker
 	io.Closer
+	Stat() (os.FileInfo, error)
 }
 
 var (
@@ -153,10 +154,6 @@ var (
 		return os.OpenFile(file, flag, perms)
 	}
 )
-
-// See "man lseek". Value passed to os.File.Seek as the whence
-// parameter to ensure its not possible to seek past end of file.
-const SeekData = 3
 
 // Error codes produced by Parse function
 type ErrorCode int
@@ -176,6 +173,9 @@ const (
 	// Length of Unified2Packet does not match length in
 	// header. Possible corrupt file.
 	E_PacketLen
+	// Reading information about file failed, i.e. calling
+	// os.File.Stat
+	E_FileInfo
 )
 
 // Errors returned by parse function, type primarily used for test
@@ -256,9 +256,26 @@ func Parse(
 	}
 	defer f.Close()
 
-	// 3 == SEEK_DATA => fails if offset is past end of file.  See
-	// "man lseek", possibly using SEEK_DATA is not portable.
-	newoffset, err := f.Seek(offset, SeekData)
+	fi, err := f.Stat()
+	if err != nil {
+		return &parseError{
+			message:   "Unable to read file info",
+			file:      file,
+			ErrorCode: E_FileInfo,
+			error:     err,
+		}
+	}
+
+	if fi.Size() < offset {
+		return &parseError{
+			message:   "Offset larger than file",
+			file:      file,
+			ErrorCode: E_Seek,
+			error:     err,
+		}
+	}
+
+	newoffset, err := f.Seek(offset, io.SeekStart)
 	if err != nil {
 		return &parseError{
 			message:   "Unable to seek on file",

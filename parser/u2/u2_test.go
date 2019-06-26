@@ -32,7 +32,10 @@ import (
 	"github.com/kazkansouh/gotestlib/testio"
 )
 
-var anError = errors.New("An Error")
+var (
+	anError    = errors.New("An Error")
+	otherError = errors.New("A Different Error")
+)
 
 func TestReadData(t *testing.T) {
 	type test struct {
@@ -375,7 +378,7 @@ func TestParse_NoOpen(t *testing.T) {
 }
 
 func TestParse_NoSeek(t *testing.T) {
-	testfunc := func(rsc readSeekCloser, expected error) func(*testing.T) {
+	testfunc := func(rsc readSeekCloser, code ErrorCode, expected error) func(*testing.T) {
 		return func(t *testing.T) {
 			file := "somefile"
 			offset := int64(123)
@@ -389,8 +392,8 @@ func TestParse_NoSeek(t *testing.T) {
 			openFile = func(f string, flag int, p os.FileMode) (readSeekCloser, error) {
 				return &testio.MockFile{
 					S: testio.SF(func(o int64, w int) (int64, error) {
-						if w != SeekData {
-							t.Error("Seek called without whence=SeekData")
+						if w != io.SeekStart {
+							t.Error("Seek called without whence=SeekStart")
 						}
 						if o != offset {
 							t.Errorf("Seek called with incorrect offset, expecting %d, got %d", offset, o)
@@ -401,6 +404,7 @@ func TestParse_NoSeek(t *testing.T) {
 						close(closed)
 						return nil
 					}),
+					St: testio.StatF(rsc.Stat),
 				}, nil
 			}
 
@@ -415,16 +419,10 @@ func TestParse_NoSeek(t *testing.T) {
 				case err := <-errors:
 					results = nil
 					pe, ok := err.(ParseError)
-					if ok && pe.Code() == E_Seek {
-						if pe.File() != file {
-							t.Error("Error for wrong file")
-						}
-						if e := pe.NextError(); e != expected {
-							t.Error("Unexpected NextError:", e)
-						}
-					} else {
-						t.Error("ParseError expected")
-					}
+					assert.Assert(t, ok)
+					assert.Equal(t, pe.Code(), code)
+					assert.Equal(t, pe.File(), file)
+					assert.Equal(t, pe.NextError(), expected)
 				case <-results:
 					t.Fatal("Parse returned an unexpected result")
 				case <-time.NewTimer(time.Millisecond * 100).C:
@@ -440,16 +438,33 @@ func TestParse_NoSeek(t *testing.T) {
 			}
 		}
 	}
-	t.Run("seeker error", testfunc(&testio.MockFile{
-		S: testio.SF(func(o int64, w int) (int64, error) {
-			return 0, anError
+
+	t.Run("stat-fail", testfunc(&testio.MockFile{
+		St: testio.StatF(func() (os.FileInfo, error) {
+			return nil, anError
 		}),
-	}, anError))
-	t.Run("seeker wrong location", testfunc(&testio.MockFile{
+	}, E_FileInfo, anError))
+	t.Run("out-of-range", testfunc(&testio.MockFile{
+		St: testio.StatF(func() (os.FileInfo, error) {
+			return &testio.MockFileInfo{FileSize: 100}, nil
+		}),
+	}, E_Seek, nil))
+	t.Run("seeker-error", testfunc(&testio.MockFile{
+		St: testio.StatF(func() (os.FileInfo, error) {
+			return &testio.MockFileInfo{FileSize: 200}, nil
+		}),
+		S: testio.SF(func(o int64, w int) (int64, error) {
+			return 0, otherError
+		}),
+	}, E_Seek, otherError))
+	t.Run("seeker-wrong-location", testfunc(&testio.MockFile{
+		St: testio.StatF(func() (os.FileInfo, error) {
+			return &testio.MockFileInfo{FileSize: 200}, nil
+		}),
 		S: testio.SF(func(o int64, w int) (int64, error) {
 			return 0, nil
 		}),
-	}, nil))
+	}, E_Seek, nil))
 
 }
 
