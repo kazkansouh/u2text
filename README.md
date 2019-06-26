@@ -1,5 +1,7 @@
 # Unified2 log parser for Go - u2text
 
+[![Build Status](https://travis-ci.org/kazkansouh/u2text.svg?branch=master)](https://travis-ci.org/kazkansouh/u2text)
+
 This code (`u2text`) was written primarily as a tool with a functional
 and clean interface that has a small number of runtime dependencies to
 post-process the [Snort][snort] unified2 log files in a lab
