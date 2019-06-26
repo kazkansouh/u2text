@@ -286,6 +286,7 @@ func (s *spooler) process(result chan<- *u2.Record) {
 	var clientresult <-chan *u2.Record
 	var clienterrors <-chan error
 	var clientshutdown chan *u2.Unit
+	var clientshutdown_pending chan *u2.Unit
 
 	timer := time.NewTimer(0)
 
@@ -305,9 +306,10 @@ func (s *spooler) process(result chan<- *u2.Record) {
 
 	start := func(file string, offset int64) {
 		clientshutdown = make(chan *u2.Unit, 1)
+		clientshutdown_pending = nil
 		clientresult, clienterrors = parser.ParseU2(filepath.Join(s.logdir, file), offset, clientshutdown)
-		if batch && clientshutdown != nil {
-			clientshutdown <- u2.U
+		if batch {
+			clientshutdown_pending = clientshutdown
 		}
 		if processshutdown_local == nil {
 			processshutdown_local = s.processshutdown
@@ -344,9 +346,9 @@ loop:
 					} else {
 						// already parsing file, request graceful shutdown
 						log.Println("Newfile pending: " + file)
-						if !batch && clientshutdown != nil {
+						if !batch {
 							// already notified in batch mode
-							clientshutdown <- u2.U
+							clientshutdown_pending = clientshutdown
 						}
 						newpending = file
 					}
@@ -366,9 +368,7 @@ loop:
 			if graceful {
 				batch = true
 				log.Println("Shutdown requested (graceful)")
-				if clientshutdown != nil {
-					clientshutdown <- u2.U
-				}
+				clientshutdown_pending = clientshutdown
 			} else {
 				brutal = true
 				log.Println("Shutdown requested (brutal)")
@@ -376,6 +376,7 @@ loop:
 				if clientshutdown != nil {
 					close(clientshutdown)
 					clientshutdown = nil
+					clientshutdown_pending = nil
 				}
 			}
 		case perr := <-clienterrors:
@@ -387,6 +388,8 @@ loop:
 			brutal = true
 			newpending = ""
 			log.Println("ERROR: Unable to parse unified2 file:", err.Error())
+		case clientshutdown_pending <- u2.U:
+			clientshutdown_pending = nil
 		default:
 		}
 
