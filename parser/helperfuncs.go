@@ -85,7 +85,7 @@ func ParseU2(
 	offset int64,
 	shutdown u2.UnitChannel,
 ) (<-chan *u2.Record, <-chan error) {
-	result := make(chan *u2.Record, 10)
+	result := make(chan *u2.Record, 0)
 	errors := make(chan error, 0)
 	log.Printf("Parsing %s at offset %x\n", file, offset)
 	go func() {
