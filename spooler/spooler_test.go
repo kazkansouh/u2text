@@ -449,7 +449,7 @@ func TestSpoolerSync(t *testing.T) {
 			expected:  []*u2.Record{},
 			marker:    &Marker{"snort.unified2.1560420495", 5000},
 			newmarker: &Marker{"snort.unified2.1560420495", 5000},
-			err:       "Unable to seek",
+			err:       "Offset larger than file",
 			errcode:   E_Parse,
 			setup: func(t *testing.T, name string, s *spooler, step int) {
 				switch step {
@@ -619,6 +619,25 @@ func TestSpoolerSync(t *testing.T) {
 					LoadFile(t, "snort.unified2.1560420495", s.logdir)
 				case 3:
 					assert.Assert(t, s.Stop(true))
+					assert.Assert(t, s.Stop(true))
+				}
+			},
+		},
+		&test{
+			name: "multi-file-start-graceful-marker-end",
+			expected: []*u2.Record{
+				R(7, "snort.unified2.1560546773"),
+				R(2, "snort.unified2.1560546773"),
+			},
+			marker:    &Marker{"snort.unified2.1560420495", 279},
+			newmarker: &Marker{"snort.unified2.1560546773", 279},
+			err:       "",
+			setup: func(t *testing.T, name string, s *spooler, step int) {
+				switch step {
+				case 0:
+					LoadFile(t, "snort.unified2.1560420495", s.logdir)
+					LoadFile(t, "snort.unified2.1560546773", s.logdir)
+				case 1:
 					assert.Assert(t, s.Stop(true))
 				}
 			},
@@ -804,7 +823,7 @@ func TestSpoolerStart(t *testing.T) {
 			expected:  []*u2.Record{},
 			marker:    &Marker{"snort.unified2.1560420495", 5000},
 			newmarker: &Marker{"snort.unified2.1560420495", 5000},
-			err:       "Unable to seek",
+			err:       "Offset larger than file",
 			errcode:   E_Parse,
 			setup: func(t *testing.T, name string, s *spooler, step int) {
 				switch step {
