@@ -80,6 +80,11 @@ The program was developed against the following:
 * Snort 2.9.13.0
 * TShark (Wireshark) 2.6.8
 * Graylog 3.0.1
+* Linux 4.15.0-48-generic
+
+Use is made of the [`log/syslog`][syslog] package which is not
+available on Windows, therefore it is not possible to build on
+Windows.
 
 ## Usage
 
@@ -439,3 +444,4 @@ Licensed under GPLv3, Copyright 2019, Karim Kanso, All rights reserved.
 [parser]: https://godoc.org/github.com/kazkansouh/u2text/parser "parser - GoDoc"
 [u2]: https://godoc.org/github.com/kazkansouh/u2text/parser/u2 "u2 - GoDoc"
 [spooler]: https://godoc.org/github.com/kazkansouh/u2text/spooler "spooler - GoDoc"
+[syslog]: https://godoc.org/log/syslog "syslog - GoDoc"

@@ -428,7 +428,7 @@ func printConfig() {
 			"Logging file":                  logFile,
 			"Log display packet":            logDisplayPacket.String(),
 			"Enable packet server":          logPacketServerPresentationAuthority != "",
-			"Packet server external url":    "http://" + logPacketServerPresentationAuthority,
+			"Packet server external url":    logPacketServerPresentationAuthority,
 			"Packet server bind address":    logPacketServerAddress,
 			"Packet server cache directory": logPacketDirectory,
 		},
